@@ -1,147 +1,264 @@
 <?php
-// ==========================================
-// BAGIAN BACKEND (LAYER 7 API - RATE LIMITED)
-// ==========================================
+/*
+ * ============================================================
+ * SAFE WEB LOAD TESTER (MANDATORY PROXY, MULTI-CURL CONCURRENT 25)
+ * ============================================================
+ */
 
 session_start();
-set_time_limit(120);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    header('Content-Type: application/json');
-    
-    $cooldown_limit = 15;
-    $current_time = time();
+    header('Content-Type: application/json; charset=utf-8');
 
-    if (isset($_SESSION['last_submit_time'])) {
-        $time_passed = $current_time - $_SESSION['last_submit_time'];
-        if ($time_passed < $cooldown_limit) {
-            $sisa_waktu = $cooldown_limit - $time_passed;
-            echo json_encode([
-                'error' => "Harap tunggu {$sisa_waktu} detik lagi sebelum mengirim request kembali (Backend Protection)."
-            ]);
+    $action = $_POST['action'] ?? '';
+
+    if ($action === 'start') {
+        $url = trim($_POST['url'] ?? '');
+        $total = (int)($_POST['total_requests'] ?? 500);
+        
+        $proxy = trim($_POST['proxy'] ?? '');
+        $proxyUser = trim($_POST['proxy_user'] ?? '');
+        $proxyPass = trim($_POST['proxy_pass'] ?? '');
+        $referer = trim($_POST['referer'] ?? '');
+        $origin = trim($_POST['origin'] ?? '');
+
+        if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
+            echo json_encode(['ok' => false, 'error' => 'URL tidak valid.']);
             exit;
         }
-    }
 
-    $_SESSION['last_submit_time'] = $current_time;
+        if (empty($proxy)) {
+            echo json_encode(['ok' => false, 'error' => 'Proxy wajib diisi! Harap masukkan IP:PORT proxy.']);
+            exit;
+        }
 
-    $url = trim($_POST['url'] ?? '');
-    $custom_referrer = trim($_POST['referrer'] ?? '');
-    $custom_origin   = trim($_POST['origin'] ?? '');
+        $total = max(1, min($total, 500));
 
-    $total_requests = (int)($_POST['total_requests'] ?? 1000);
-    if ($total_requests < 1) $total_requests = 1;
-    if ($total_requests > 1000) $total_requests = 1000;
-    
-    $concurrent = (int)($_POST['concurrent'] ?? 25); 
-    if ($concurrent < 1) $concurrent = 1;
-    if ($concurrent > 40) $concurrent = 40;
+        $_SESSION['test'] = [
+            'url' => $url,
+            'total' => $total,
+            'proxy' => $proxy,
+            'proxy_user' => $proxyUser,
+            'proxy_pass' => $proxyPass,
+            'referer' => $referer,
+            'origin' => $origin,
+            'completed' => 0,
+            'success' => 0,
+            'client_error' => 0,
+            'server_error' => 0,
+            'rate_limited' => 0,
+            'proxy_failed' => 0,
+            'other' => 0,
+            'status' => 'running',
+            'started_at' => microtime(true),
+        ];
 
-    $proxy = trim($_POST['proxy'] ?? '');
-    $proxy_auth = trim($_POST['proxy_auth'] ?? '');
-    
-    if (empty($url) || !filter_var($url, FILTER_VALIDATE_URL)) {
-        echo json_encode(['error' => 'URL Endpoint Target tidak valid.']);
+        session_write_close();
+        echo json_encode(['ok' => true, 'status' => 'running']);
         exit;
     }
 
-    if (empty($proxy)) {
-        echo json_encode(['error' => 'Alamat Proxy (IP:Port) wajib diisi untuk simulasi Layer 7!']);
+    if ($action === 'pause') {
+        if (isset($_SESSION['test'])) {
+            $_SESSION['test']['status'] = 'paused';
+        }
+        session_write_close();
+        echo json_encode(['ok' => true, 'status' => 'paused']);
         exit;
     }
 
-    $results = [
-        'sukses_200'  => 0, 
-        'limit_429'   => 0, 
-        'proxy_error' => 0, 
-        'lainnya'     => 0, 
-        'total'       => 0
-    ];
-
-    $ch_list = [];
-
-    $human_headers = [
-        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Cache-Control: no-cache",
-        "Connection: keep-alive",
-        "Sec-Ch-Ua: \"Not A(Brand\";v=\"99\", \"Google Chrome\";v=\"121\", \"Chromium\";v=\"121\"",
-        "Sec-Ch-Ua-Mobile: ?0",
-        "Sec-Ch-Ua-Platform: \"Windows\"",
-        "Sec-Fetch-Dest: document",
-        "Sec-Fetch-Mode: navigate",
-        "Sec-Fetch-Site: cross-site",
-        "Sec-Fetch-User: ?1",
-        "Upgrade-Insecure-Requests: 1"
-    ];
-
-    if (!empty($custom_referrer)) $human_headers[] = "Referer: " . $custom_referrer;
-    if (!empty($custom_origin)) $human_headers[] = "Origin: " . $custom_origin;
-
-    $waktu_mulai = microtime(true);
-
-    for ($i = 0; $i < $total_requests; $i++) {
-        $ch = curl_init();
-        $target_url = $url . (strpos($url, '?') !== false ? '&' : '?') . 'l7_test_id=' . uniqid();
-        
-        curl_setopt($ch, CURLOPT_URL, $target_url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 8);
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 6);
-        curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $human_headers);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true); 
-        curl_setopt($ch, CURLOPT_PROXY, $proxy);
-        if (!empty($proxy_auth)) curl_setopt($ch, CURLOPT_PROXYUSERPWD, $proxy_auth);
-
-        $ch_list[] = $ch;
+    if ($action === 'resume') {
+        if (isset($_SESSION['test'])) {
+            $_SESSION['test']['status'] = 'running';
+        }
+        session_write_close();
+        echo json_encode(['ok' => true, 'status' => 'running']);
+        exit;
     }
 
-    $batches = array_chunk($ch_list, $concurrent);
-    $total_batches = count($batches);
-    $target_total_duration = 55.0; 
-    $interval_per_batch = $target_total_duration / max(1, $total_batches);
+    if ($action === 'stop') {
+        if (isset($_SESSION['test'])) {
+            $_SESSION['test']['status'] = 'stopped';
+        }
+        session_write_close();
+        echo json_encode(['ok' => true, 'status' => 'stopped']);
+        exit;
+    }
 
-    foreach ($batches as $index => $batch) {
-        $batch_start = microtime(true);
+    if ($action === 'status') {
+        if (!isset($_SESSION['test'])) {
+            session_write_close();
+            echo json_encode(['ok' => true, 'exists' => false]);
+            exit;
+        }
+        $testData = $_SESSION['test'];
+        session_write_close();
+        echo json_encode(['ok' => true, 'exists' => true, 'test' => $testData]);
+        exit;
+    }
+
+    /*
+     * Eksekusi Multi-cURL Secara Serentak (Batch Paralel)
+     */
+    if ($action === 'request_batch') {
+        if (!isset($_SESSION['test'])) {
+            session_write_close();
+            echo json_encode(['ok' => false, 'error' => 'Test belum dimulai.']);
+            exit;
+        }
+
+        $test =& $_SESSION['test'];
+
+        if ($test['status'] !== 'running') {
+            $testData = $test;
+            session_write_close();
+            echo json_encode(['ok' => true, 'status' => $testData['status'], 'test' => $testData]);
+            exit;
+        }
+
+        if ($test['completed'] >= $test['total']) {
+            $test['status'] = 'finished';
+            $testData = $test;
+            session_write_close();
+            echo json_encode(['ok' => true, 'status' => 'finished', 'test' => $testData]);
+            exit;
+        }
+
+        $remaining = $test['total'] - $test['completed'];
+        $batchSize = min(25, $remaining); // 25 request jalan bersamaan per kirim
+
         $mh = curl_multi_init();
-        foreach ($batch as $ch) { curl_multi_add_handle($mh, $ch); }
+        $channels = [];
 
-        $running = null;
+        $humanUserAgents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+        ];
+
+        for ($i = 0; $i < $batchSize; $i++) {
+            $ch = curl_init();
+            $randomUserAgent = $humanUserAgents[array_rand($humanUserAgents)];
+
+            $curlOptions = [
+                CURLOPT_URL => $test['url'],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_TIMEOUT => 10,
+                CURLOPT_HTTPGET => true,
+                CURLOPT_USERAGENT => $randomUserAgent,
+                CURLOPT_PROXY => $test['proxy'],
+            ];
+
+            if (!empty($test['proxy_user'])) {
+                $curlOptions[CURLOPT_PROXYUSERPWD] = $test['proxy_user'] . ':' . $test['proxy_pass'];
+            }
+
+            $headers = [
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Cache-Control: no-cache',
+            ];
+
+            if (!empty($test['referer'])) {
+                $curlOptions[CURLOPT_REFERER] = $test['referer'];
+            }
+            if (!empty($test['origin'])) {
+                $headers[] = 'Origin: ' . $test['origin'];
+            }
+            $curlOptions[CURLOPT_HTTPHEADER] = $headers;
+
+            curl_setopt_array($ch, $curlOptions);
+            curl_multi_add_handle($mh, $ch);
+            $channels[] = ['ch' => $ch, 'start_time' => microtime(true)];
+        }
+
+        $runningActive = null;
         do {
-            curl_multi_exec($mh, $running);
-            curl_multi_select($mh, 0.01);
-        } while ($running > 0);
+            curl_multi_exec($mh, $runningActive);
+            curl_multi_select($mh);
+        } while ($runningActive > 0);
 
-        foreach ($batch as $ch) {
-            $info = curl_getinfo($ch);
-            $http_code = (int)$info['http_code'];
-            $curl_err = curl_error($ch);
-            
-            if ($http_code == 200) { $results['sukses_200']++; 
-            } elseif ($http_code == 429) { $results['limit_429']++; 
-            } elseif (in_array($http_code, [0, 407, 502, 503, 504]) || !empty($curl_err)) {
-                $results['proxy_error']++;
-            } else { $results['lainnya']++; }
-            
-            $results['total']++;
+        $batchResults = [];
+
+        foreach ($channels as $item) {
+            $ch = $item['ch'];
+            $startTime = $item['start_time'];
+
+            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlErrNo = curl_errno($ch);
+            $curlError = curl_error($ch);
+            $latency = round((microtime(true) - $startTime) * 1000, 2);
+
+            $test['completed']++;
+            $statusType = 'other';
+            $statusMessage = '';
+
+            $isProxyError = false;
+            if ($curlErrNo == 7 || $curlErrNo == 5 || $curlErrNo == 6 || $curlErrNo == 28 || strpos(strtolower($curlError), 'proxy') !== false) {
+                $isProxyError = true;
+            }
+
+            if ($isProxyError || ($curlErrNo !== 0 && $httpCode === 0)) {
+                $test['proxy_failed']++;
+                $statusType = 'proxy_failed';
+                $statusMessage = "Proxy Mati / Gagal: " . ($curlError ?: "Errno $curlErrNo");
+            } elseif ($httpCode === 200) {
+                $test['success']++;
+                $statusType = 'success';
+                $statusMessage = "OK 200";
+            } elseif ($httpCode === 429) {
+                $test['rate_limited']++;
+                $statusType = 'rate_limited';
+                $statusMessage = "Rate Limited 429";
+            } elseif ($httpCode >= 400 && $httpCode < 500) {
+                $test['client_error']++;
+                $statusType = 'client_error';
+                $statusMessage = "Client Error {$httpCode}";
+            } elseif ($httpCode >= 500) {
+                $test['server_error']++;
+                $statusType = 'server_error';
+                $statusMessage = "Server Error {$httpCode}";
+            } else {
+                $test['other']++;
+                $statusType = 'other';
+                $statusMessage = "HTTP Code {$httpCode}";
+            }
+
+            $batchResults[] = [
+                'req_num' => $test['completed'],
+                'status_message' => $statusMessage,
+                'status_type' => $statusType,
+                'latency' => $latency
+            ];
+
             curl_multi_remove_handle($mh, $ch);
             curl_close($ch);
         }
+
         curl_multi_close($mh);
 
-        if ($index < $total_batches - 1) {
-            $elapsed_batch_time = microtime(true) - $batch_start;
-            $sleep_time = $interval_per_batch - $elapsed_batch_time;
-            if ($sleep_time > 0) usleep((int)($sleep_time * 1000000));
+        if ($test['completed'] >= $test['total']) {
+            $test['status'] = 'finished';
         }
+
+        $testData = $test;
+        session_write_close();
+
+        echo json_encode([
+            'ok' => true,
+            'status' => $testData['status'],
+            'batch_results' => $batchResults,
+            'is_finished' => ($testData['status'] === 'finished'),
+            'test' => $testData
+        ]);
+        exit;
     }
 
-    echo json_encode([
-        'status'       => 'success', 
-        'data'         => $results, 
-        'waktu_eksekusi' => round(microtime(true) - $waktu_mulai, 2)
-    ]);
+    session_write_close();
+    echo json_encode(['ok' => false, 'error' => 'Action tidak dikenal.']);
     exit;
 }
 ?>
@@ -149,302 +266,318 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <!DOCTYPE html>
 <html lang="id">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Layer 7 API - Cyber Aesthetic Dashboard</title>
-    <!-- Google Fonts Inter -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg-deep: #090d16;
-            --bg-card: rgba(17, 24, 39, 0.7);
-            --border-glass: rgba(255, 255, 255, 0.08);
-            --accent-glow: rgba(99, 102, 241, 0.35);
-            --primary: #6366f1;
-            --primary-hover: #4f46e5;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Inter', sans-serif;
-        }
-
-        body {
-            background-color: var(--bg-deep);
-            background-image: 
-                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.12) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(14, 165, 233, 0.1) 0%, transparent 40%);
-            color: var(--text-main);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 2rem 1rem;
-        }
-
-        .container {
-            width: 100%;
-            max-width: 600px;
-            background: var(--bg-card);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border: 1px solid var(--border-glass);
-            border-radius: 20px;
-            padding: 2.5rem;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 30px var(--accent-glow);
-        }
-
-        .header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 2rem;
-        }
-
-        .header h2 {
-            font-size: 1.5rem;
-            font-weight: 700;
-            letter-spacing: -0.025em;
-            background: linear-gradient(to right, #ffffff, #94a3b8);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .fire-icon {
-            font-size: 1.75rem;
-            animation: pulse-glow 2s infinite ease-in-out;
-        }
-
-        @keyframes pulse-glow {
-            0%, 100% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(249, 115, 22, 0.4)); }
-            50% { transform: scale(1.1); filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.8)); }
-        }
-
-        .form-group {
-            margin-bottom: 1.25rem;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: 500;
-            font-size: 0.875rem;
-            color: var(--text-muted);
-        }
-
-        input {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid var(--border-glass);
-            border-radius: 10px;
-            color: var(--text-main);
-            font-size: 0.95rem;
-            transition: all 0.2s ease;
-        }
-
-        input:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
-            background: rgba(15, 23, 42, 0.9);
-        }
-
-        .row {
-            display: flex;
-            gap: 1rem;
-        }
-
-        .row .form-group {
-            flex: 1;
-        }
-
-        button {
-            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
-            color: white;
-            border: none;
-            padding: 0.875rem;
-            width: 100%;
-            font-weight: 600;
-            font-size: 1rem;
-            cursor: pointer;
-            border-radius: 10px;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
-            margin-top: 0.5rem;
-        }
-
-        button:hover {
-            opacity: 0.95;
-            transform: translateY(-1px);
-            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6);
-        }
-
-        button:active {
-            transform: translateY(0);
-        }
-
-        button:disabled {
-            background: #334155;
-            box-shadow: none;
-            cursor: not-allowed;
-            opacity: 0.7;
-        }
-
-        .result-box {
-            margin-top: 2rem;
-            background: rgba(15, 23, 42, 0.5);
-            border: 1px solid var(--border-glass);
-            border-radius: 14px;
-            padding: 1.5rem;
-            display: none;
-            animation: fadeIn 0.4s ease-out forwards;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .result-title {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 1rem;
-            color: var(--text-main);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .stat-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.75rem;
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
-            padding-bottom: 0.5rem;
-        }
-
-        .stat-item:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
-        }
-
-        .stat-value {
-            font-weight: 600;
-            color: var(--text-main);
-        }
-
-        .val-success { color: #34d399; }
-        .val-limit { color: #f87171; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>7 Layer</title>
+<style>
+:root {
+    --bg: #080b12;
+    --card: rgba(17, 24, 39, .82);
+    --border: rgba(255,255,255,.08);
+    --primary: #6366f1;
+    --primary2: #4f46e5;
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --success: #34d399;
+    --danger: #f87171;
+    --warning: #fbbf24;
+    --info: #38bdf8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter, system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 25px;
+}
+.container {
+    width: 100%;
+    max-width: 700px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 30px;
+    box-shadow: 0 30px 80px rgba(0,0,0,.55);
+}
+.header { display: flex; align-items: center; gap: 12px; margin-bottom: 25px; }
+.icon { font-size: 30px; }
+.header h1 { font-size: 22px; }
+.header p { margin-top: 4px; color: var(--muted); font-size: 13px; }
+.form-group { margin-bottom: 18px; }
+label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 13px; font-weight: 600; }
+input {
+    width: 100%; padding: 13px 14px; border-radius: 11px;
+    border: 1px solid var(--border); background: rgba(15,23,42,.75); color: var(--text); outline: none;
+}
+.row { display: flex; gap: 15px; }
+.row > div { flex: 1; }
+.buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 20px; }
+button { border: 0; border-radius: 11px; padding: 13px; color: white; font-weight: 700; cursor: pointer; transition: .2s; }
+button:disabled { opacity: .4; cursor: not-allowed; }
+.start { background: linear-gradient(135deg, var(--primary), var(--primary2)); }
+.pause { background: #334155; }
+.stop { background: #991b1b; }
+.status {
+    margin-top: 25px; display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 15px; border-radius: 11px; background: rgba(15,23,42,.7); border: 1px solid var(--border);
+}
+.progress-wrap { margin-top: 18px; }
+.progress-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+.progress { height: 10px; background: #1e293b; border-radius: 99px; overflow: hidden; }
+.progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary), #22d3ee); transition: width .1s; }
+.stats { margin-top: 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stat { padding: 15px; border-radius: 12px; background: rgba(15,23,42,.6); border: 1px solid var(--border); }
+.stat-title { font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+.stat-value { font-size: 18px; font-weight: 800; }
+.success { color: var(--success); }
+.error { color: var(--danger); }
+.warning { color: var(--warning); }
+.log {
+    margin-top: 20px; background: #05070c; border: 1px solid var(--border); border-radius: 12px;
+    padding: 13px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 12px; color: #a7f3d0;
+}
+</style>
 </head>
 <body>
 
 <div class="container">
     <div class="header">
-        <span class="fire-icon">🔥</span>
-        <h2>Layer 7 API Engine</h2>
+        <div class="icon">🚀</div>
+        <div>
+            <h1>Super Fast Multi-Request Tester</h1>
+            <p>Kirim request secara paralel (dretttt) menggunakan proxy wajib.</p>
+        </div>
     </div>
 
     <form id="testerForm">
         <div class="form-group">
-            <label>URL Endpoint API</label>
-            <input type="url" name="url" placeholder="https://example.com/api" required>
+            <label>URL Endpoint</label>
+            <input type="url" id="url" placeholder="https://domain-kamu.com/api/health" required>
         </div>
 
         <div class="form-group">
-            <label>Referrer (Wajib)</label>
-            <input type="url" name="referrer" placeholder="https://example.com/" required>
+            <label>Total Request (Maks: 500)</label>
+            <input type="number" id="total" value="500" min="1" max="500" required>
         </div>
 
         <div class="form-group">
-            <label>Origin (Wajib)</label>
-            <input type="text" name="origin" placeholder="https://example.com" required>
+            <label>Proxy **(Wajib)** - Cth: 123.45.67.89:8080</label>
+            <input type="text" id="proxy" placeholder="IP:PORT" required>
         </div>
 
         <div class="row">
             <div class="form-group">
-                <label>Total Request (Max 1k)</label>
-                <input type="number" name="total_requests" value="1000" max="1000" required>
+                <label>Proxy Username (Opsional)</label>
+                <input type="text" id="proxyUser" placeholder="Username">
             </div>
             <div class="form-group">
-                <label>Concurrent (Max 40)</label>
-                <input type="number" name="concurrent" value="25" max="40" required>
+                <label>Proxy Password (Opsional)</label>
+                <input type="password" id="proxyPass" placeholder="Password">
             </div>
         </div>
 
-        <div class="form-group">
-            <label>Proxy (IP:Port)</label>
-            <input type="text" name="proxy" placeholder="123.45.67.89:8080" required>
+        <div class="row">
+            <div class="form-group">
+                <label>Referer Header (Opsional)</label>
+                <input type="url" id="referer" placeholder="https://domain-asal.com">
+            </div>
+            <div class="form-group">
+                <label>Origin Header (Opsional)</label>
+                <input type="url" id="origin" placeholder="https://domain-asal.com">
+            </div>
         </div>
 
-        <div class="form-group">
-            <label>Proxy Auth (Opsional)</label>
-            <input type="text" name="proxy_auth" placeholder="username:password">
+        <div class="buttons">
+            <button type="button" class="start" id="startBtn">▶ START</button>
+            <button type="button" class="pause" id="pauseBtn" disabled>⏸ PAUSE</button>
+            <button type="button" class="stop" id="stopBtn" disabled>⏹ STOP</button>
         </div>
-
-        <button type="submit" id="btnSubmit">Tembak Layer 7!</button>
     </form>
 
-    <div id="resultBox" class="result-box">
-        <div class="result-title">📊 Hasil Pengujian Sistem</div>
-        <div class="stat-item">
-            <span>Total Terkirim:</span>
-            <span id="resTotal" class="stat-value">0</span>
+    <div class="status">
+        <span class="status-label">STATUS</span>
+        <span id="statusText" style="font-weight: 700;">IDLE</span>
+    </div>
+
+    <div class="progress-wrap">
+        <div class="progress-info">
+            <span id="cooldownInfo">Progress</span>
+            <span id="progressText">0 / 0</span>
         </div>
-        <div class="stat-item">
-            <span>Masuk / Sukses (200):</span>
-            <span id="res200" class="stat-value val-success">0</span>
-        </div>
-        <div class="stat-item">
-            <span>Kena Rate Limit (429):</span>
-            <span id="res429" class="stat-value val-limit">0</span>
-        </div>
-        <div class="stat-item">
-            <span>Waktu Eksekusi:</span>
-            <span id="resWaktu" class="stat-value">0 detik</span>
+        <div class="progress">
+            <div class="progress-bar" id="progressBar"></div>
         </div>
     </div>
+
+    <div class="stats">
+        <div class="stat"><div class="stat-title">Total</div><div class="stat-value" id="resTotal">0</div></div>
+        <div class="stat"><div class="stat-title">Success (200)</div><div class="stat-value success" id="resSuccess">0</div></div>
+        <div class="stat"><div class="stat-title">Rate Limited (429)</div><div class="stat-value warning" id="resRateLimited">0</div></div>
+        <div class="stat"><div class="stat-title">Proxy Mati / Gagal</div><div class="stat-value error" id="resProxyFailed">0</div></div>
+        <div class="stat"><div class="stat-title">Client Error (4xx)</div><div class="stat-value warning" id="resClient">0</div></div>
+        <div class="stat"><div class="stat-title">Server Error (5xx)</div><div class="stat-value error" id="resServer">0</div></div>
+    </div>
+
+    <div class="log" id="log">7 Layer siap digunakan...</div>
 </div>
 
 <script>
-document.getElementById('testerForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    const btn = document.getElementById('btnSubmit');
-    const resultBox = document.getElementById('resultBox');
-    
-    btn.disabled = true; 
-    btn.innerText = "⏳ Sedang Menembak Layer 7...";
-    resultBox.style.display = 'none';
+const startBtn = document.getElementById('startBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const stopBtn = document.getElementById('stopBtn');
+const statusText = document.getElementById('statusText');
+const progressText = document.getElementById('progressText');
+const progressBar = document.getElementById('progressBar');
+const resTotal = document.getElementById('resTotal');
+const resSuccess = document.getElementById('resSuccess');
+const resRateLimited = document.getElementById('resRateLimited');
+const resProxyFailed = document.getElementById('resProxyFailed');
+const resClient = document.getElementById('resClient');
+const resServer = document.getElementById('resServer');
+const logBox = document.getElementById('log');
 
-    try {
-        const res = await fetch(window.location.href, { method: 'POST', body: new FormData(this) });
-        const json = await res.json();
-        
-        if (json.error) {
-            alert(json.error);
-        } else {
-            document.getElementById('resTotal').innerText = json.data.total;
-            document.getElementById('res200').innerText = json.data.sukses_200;
-            document.getElementById('res429').innerText = json.data.limit_429;
-            document.getElementById('resWaktu').innerText = json.waktu_eksekusi + " detik";
-            resultBox.style.display = 'block';
-        }
-    } catch(err) { 
-        alert("⚠️ Error Jaringan / Timeout: " + err.message); 
-    } finally { 
-        btn.disabled = false; 
-        btn.innerText = "Tembak Layer 7!"; 
+let running = false;
+let stopped = false;
+let isPausedState = false;
+
+async function post(action, data = {}) {
+    const form = new FormData();
+    form.append('action', action);
+    for (const key in data) form.append(key, data[key]);
+    const response = await fetch(window.location.href, { method: 'POST', body: form, cache: 'no-store' });
+    return await response.json();
+}
+
+function log(message, type = 'normal') {
+    const time = new Date().toLocaleTimeString();
+    let colorStyle = '#a7f3d0';
+    if (type === 'success') colorStyle = '#34d399';
+    else if (type === 'warning') colorStyle = '#fbbf24';
+    else if (type === 'error') colorStyle = '#f87171';
+    logBox.innerHTML += `<div style="color: ${colorStyle}">[${time}] ${message}</div>`;
+    logBox.scrollTop = logBox.scrollHeight;
+}
+
+function updateUI(test) {
+    if (!test) return;
+    const total = Number(test.total);
+    const completed = Number(test.completed);
+    const percent = total > 0 ? (completed / total) * 100 : 0;
+
+    progressBar.style.width = percent + '%';
+    progressText.innerText = `${completed} / ${total}`;
+    resTotal.innerText = completed;
+    resSuccess.innerText = test.success;
+    resRateLimited.innerText = test.rate_limited;
+    resProxyFailed.innerText = test.proxy_failed;
+    resClient.innerText = test.client_error;
+    resServer.innerText = test.server_error;
+    statusText.innerText = String(test.status).toUpperCase();
+}
+
+startBtn.addEventListener('click', async () => {
+    let total = parseInt(document.getElementById('total').value);
+    const url = document.getElementById('url').value.trim();
+    const proxy = document.getElementById('proxy').value.trim();
+    const proxyUser = document.getElementById('proxyUser').value.trim();
+    const proxyPass = document.getElementById('proxyPass').value.trim();
+    const referer = document.getElementById('referer').value.trim();
+    const origin = document.getElementById('origin').value.trim();
+
+    if (!url || !proxy) {
+        alert('URL dan Proxy wajib diisi!');
+        return;
+    }
+    if (total > 500) total = 500;
+
+    const result = await post('start', { url, total_requests: total, proxy, proxy_user: proxyUser, proxy_pass: proxyPass, referer, origin });
+    if (!result.ok) { alert(result.error); return; }
+
+    running = true;
+    stopped = false;
+    isPausedState = false;
+    startBtn.disabled = true;
+    pauseBtn.disabled = false;
+    stopBtn.disabled = false;
+
+    logBox.innerHTML = '';
+    log('Test super cepat dimulai secara paralel...');
+    runBatchLoop();
+});
+
+pauseBtn.addEventListener('click', async () => {
+    if (!isPausedState) {
+        await post('pause');
+        running = false;
+        isPausedState = true;
+        pauseBtn.innerText = '▶ RESUME';
+        log('Test dijeda.', 'warning');
+    } else {
+        await post('resume');
+        running = true;
+        isPausedState = false;
+        pauseBtn.innerText = '⏸ PAUSE';
+        log('Test dilanjutkan.');
+        runBatchLoop();
     }
 });
+
+stopBtn.addEventListener('click', async () => {
+    stopped = true;
+    running = false;
+    await post('stop');
+    startBtn.disabled = false;
+    pauseBtn.disabled = true;
+    stopBtn.disabled = true;
+    pauseBtn.innerText = '⏸ PAUSE';
+    isPausedState = false;
+    log('Test dihentikan.', 'error');
+});
+
+async function runBatchLoop() {
+    if (!running || stopped) return;
+
+    try {
+        const result = await post('request_batch');
+        if (!result.ok) {
+            log('Error: ' + result.error, 'error');
+            running = false;
+            return;
+        }
+
+        updateUI(result.test);
+
+        if (result.batch_results) {
+            result.batch_results.forEach(res => {
+                let lType = 'normal';
+                if (res.status_type === 'success') lType = 'success';
+                else if (res.status_type === 'rate_limited') lType = 'warning';
+                else if (res.status_type === 'proxy_failed' || res.status_type === 'server_error') lType = 'error';
+                log(`Request #${res.req_num} → [${res.status_message}] (${res.latency} ms)`, lType);
+            });
+        }
+
+        if (result.is_finished || result.test.status === 'finished') {
+            running = false;
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+            stopBtn.disabled = true;
+            log('Test selesai 100%!', 'success');
+            return;
+        }
+
+        // Lanjut batch berikutnya secara instan
+        setTimeout(runBatchLoop, 30);
+
+    } catch (err) {
+        log('Network error: ' + err.message, 'error');
+        running = false;
+    }
+}
 </script>
 
 </body>
