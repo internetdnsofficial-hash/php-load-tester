@@ -1,7 +1,7 @@
 <?php
 /*
  * ============================================================
- * SAFE WEB LOAD TESTER (MANDATORY PROXY, MULTI-CURL CONCURRENT 25)
+ * SAFE WEB LOAD TESTER (MANDATORY PROXY, MULTI-CURL CONCURRENT 50)
  * ============================================================
  */
 
@@ -32,7 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
 
-        $total = max(1, min($total, 500));
+        $total = max(1, min($total, 2000));
 
         $_SESSION['test'] = [
             'url' => $url,
@@ -98,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     /*
-     * Eksekusi Multi-cURL Secara Serentak (Batch Paralel)
+     * Eksekusi Multi-cURL Secara Serentak (Batch Paralel 50 Request Sekaligus)
      */
     if ($action === 'request_batch') {
         if (!isset($_SESSION['test'])) {
@@ -125,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $remaining = $test['total'] - $test['completed'];
-        $batchSize = min(25, $remaining); // 25 request jalan bersamaan per kirim
+        $batchSize = min(50, $remaining); // Dibatasi menjadi 50 request sekaligus per batch
 
         $mh = curl_multi_init();
         $channels = [];
@@ -154,6 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if (!empty($test['proxy_user'])) {
                 $curlOptions[CURLOPT_PROXYUSERPWD] = $test['proxy_user'] . ':' . $test['proxy_pass'];
+                $curlOptions[CURLOPT_PROXYAUTH] = CURLAUTH_ANY;
             }
 
             $headers = [
@@ -268,7 +269,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>7 Layer</title>
+<title>7 Layer - Concurrent 50</title>
 <style>
 :root {
     --bg: #080b12;
@@ -348,8 +349,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     <div class="header">
         <div class="icon">🚀</div>
         <div>
-            <h1>7 Layer</h1>
-            <p>Kirim request 7 Layer.</p>
+            <h1>7 Layer (Concurrent 50)</h1>
+            <p>Kirim request 7 Layer dengan batch 50 paralel.</p>
         </div>
     </div>
 
@@ -360,8 +361,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
         </div>
 
         <div class="form-group">
-            <label>Total Request (Maks: 500)</label>
-            <input type="number" id="total" value="500" min="1" max="500" required>
+            <label>Total Request (Maks: 2000)</label>
+            <input type="number" id="total" value="500" min="1" max="2000" required>
         </div>
 
         <div class="form-group">
@@ -422,7 +423,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
         <div class="stat"><div class="stat-title">Server Error (5xx)</div><div class="stat-value error" id="resServer">0</div></div>
     </div>
 
-    <div class="log" id="log">7 Layer siap digunakan...</div>
+    <div class="log" id="log">Tester siap digunakan (50 paralel)...</div>
 </div>
 
 <script>
@@ -492,7 +493,7 @@ startBtn.addEventListener('click', async () => {
         alert('URL dan Proxy wajib diisi!');
         return;
     }
-    if (total > 500) total = 500;
+    if (total > 2000) total = 2000;
 
     const result = await post('start', { url, total_requests: total, proxy, proxy_user: proxyUser, proxy_pass: proxyPass, referer, origin });
     if (!result.ok) { alert(result.error); return; }
@@ -505,7 +506,7 @@ startBtn.addEventListener('click', async () => {
     stopBtn.disabled = false;
 
     logBox.innerHTML = '';
-    log('Test super cepat dimulai secara paralel...');
+    log('Test 50 paralel dimulai...');
     runBatchLoop();
 });
 
@@ -570,8 +571,7 @@ async function runBatchLoop() {
             return;
         }
 
-        // Lanjut batch berikutnya secara instan
-        setTimeout(runBatchLoop, 30);
+        setTimeout(runBatchLoop, 0);
 
     } catch (err) {
         log('Network error: ' + err.message, 'error');
