@@ -125,8 +125,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $remaining = $test['total'] - $test['completed'];
-        $batchSize = min(30, $remaining); // Dibatasi menjadi 30 request sekaligus per batch
-
+        $batchSize = min(25, $remaining); // Dibatasi menjadi 30 request sekaligus per batch
+        
         $mh = curl_multi_init();
         $channels = [];
 
