@@ -1,7 +1,7 @@
 <?php
 /*
  * ============================================================
- * SAFE WEB LOAD TESTER (MANDATORY PROXY, MULTI-CURL CONCURRENT 50)
+ * SAFE WEB LOAD TESTER (MANDATORY PROXY, MULTI-CURL CONCURRENT 25)
  * ============================================================
  */
 
@@ -98,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     /*
-     * Eksekusi Multi-cURL Secara Serentak (Batch Paralel 50 Request Sekaligus)
+     * Eksekusi Multi-cURL Secara Serentak (Batch Paralel 25 Request Sekaligus)
      */
     if ($action === 'request_batch') {
         if (!isset($_SESSION['test'])) {
@@ -125,8 +125,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $remaining = $test['total'] - $test['completed'];
-        $batchSize = min(25, $remaining); // Dibatasi menjadi 30 request sekaligus per batch
-        
+        $batchSize = min(25, $remaining); // Dibatasi menjadi 25 request sekaligus per batch
+
         $mh = curl_multi_init();
         $channels = [];
 
@@ -269,7 +269,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>7 Layer - Concurrent 50</title>
+<title>7 Layer - Concurrent 25</title>
 <style>
 :root {
     --bg: #080b12;
@@ -349,8 +349,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     <div class="header">
         <div class="icon">🚀</div>
         <div>
-            <h1>7 Layer (Concurrent 50)</h1>
-            <p>Kirim request 7 Layer dengan batch 50 paralel.</p>
+            <h1>7 Layer (Concurrent 25)</h1>
+            <p>Kirim request 7 Layer dengan batch 25 paralel.</p>
         </div>
     </div>
 
@@ -423,7 +423,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
         <div class="stat"><div class="stat-title">Server Error (5xx)</div><div class="stat-value error" id="resServer">0</div></div>
     </div>
 
-    <div class="log" id="log">Tester siap digunakan (50 paralel)...</div>
+    <div class="log" id="log">Tester siap digunakan (25 paralel)...</div>
 </div>
 
 <script>
@@ -506,7 +506,7 @@ startBtn.addEventListener('click', async () => {
     stopBtn.disabled = false;
 
     logBox.innerHTML = '';
-    log('Test 50 paralel dimulai...');
+    log('Test 25 paralel dimulai...');
     runBatchLoop();
 });
 
