@@ -348,8 +348,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     <div class="header">
         <div class="icon">🚀</div>
         <div>
-            <h1>Super Fast Multi-Request Tester</h1>
-            <p>Kirim request secara paralel (dretttt) menggunakan proxy wajib.</p>
+            <h1>7 Layer</h1>
+            <p>Kirim request 7 Layer.</p>
         </div>
     </div>
 
